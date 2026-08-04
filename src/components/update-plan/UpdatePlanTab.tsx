@@ -309,8 +309,10 @@ const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ agenticRuns }) => {
           const pPhase = derivePhase(agenticRun);
           const phaseDisplay = getPhaseDisplay(pPhase);
 
-          const resultRef = (agenticRun.status?.steps?.analysis?.results?.[0] as { name?: string })
-            ?.name;
+          const stepResults = agenticRun.status?.steps?.analysis?.results;
+          const resultRef = (
+            stepResults?.[stepResults.length - 1] as { name?: string }
+          )?.name;
           const result = resultRef
             ? analysisResults.find(
                 (r: LightspeedAnalysisResult) =>
