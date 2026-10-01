@@ -310,9 +310,7 @@ const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ agenticRuns }) => {
           const phaseDisplay = getPhaseDisplay(pPhase);
 
           const stepResults = agenticRun.status?.steps?.analysis?.results;
-          const resultRef = (
-            stepResults?.[stepResults.length - 1] as { name?: string }
-          )?.name;
+          const resultRef = (stepResults?.[stepResults.length - 1] as { name?: string })?.name;
           const result = resultRef
             ? analysisResults.find(
                 (r: LightspeedAnalysisResult) =>
@@ -406,9 +404,11 @@ const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ agenticRuns }) => {
                   ) : pPhase === 'Failed' ? (
                     <StackItem>
                       <Alert variant="danger" isInline title={t('Analysis failed')}>
-                        {(
-                          agenticRun.status?.conditions as { type: string; message: string }[]
-                        )?.find((c) => c.type === 'Analyzed')?.message ?? t('Unknown error')}
+                        {result?.status?.failureReason ??
+                          (
+                            agenticRun.status?.conditions as { type: string; message: string }[]
+                          )?.find((c) => c.type === 'Analyzed')?.message ??
+                          t('Unknown error')}
                       </Alert>
                     </StackItem>
                   ) : (

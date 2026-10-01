@@ -107,13 +107,25 @@ describe('derivePhase', () => {
     expect(derivePhase(makeAgenticRun([]))).toBe('Pending');
   });
 
-  it('returns Analyzing when Analyzed=False', () => {
-    expect(derivePhase(makeAgenticRun([{ type: 'Analyzed', status: 'False' }]))).toBe('Analyzing');
+  it('returns Analyzing when Analyzed=Unknown', () => {
+    expect(
+      derivePhase(makeAgenticRun([{ type: 'Analyzed', status: 'Unknown' }])),
+    ).toBe('Analyzing');
+  });
+
+  it('returns Failed when Analyzed=False', () => {
+    expect(derivePhase(makeAgenticRun([{ type: 'Analyzed', status: 'False' }]))).toBe('Failed');
   });
 
   it('returns Failed when Analyzed=False with reason Failed', () => {
     expect(
       derivePhase(makeAgenticRun([{ type: 'Analyzed', status: 'False', reason: 'Failed' }])),
+    ).toBe('Failed');
+  });
+
+  it('returns Failed when Analyzed=False with reason AgentTimeout', () => {
+    expect(
+      derivePhase(makeAgenticRun([{ type: 'Analyzed', status: 'False', reason: 'AgentTimeout' }])),
     ).toBe('Failed');
   });
 

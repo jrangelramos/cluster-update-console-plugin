@@ -140,17 +140,8 @@ export const derivePhase = (agenticRun?: LightspeedAgenticRun): AgenticRunPhase 
   if (approved?.status === 'False') return 'Denied';
 
   if (analyzed?.status === 'True') return 'Proposed';
-  if (analyzed?.status === 'False' && analyzed?.reason === 'Failed') return 'Failed';
-  if (analyzed?.status === 'False') return 'Analyzing';
-
-  // Check if analysis step has any results (in progress)
-  if (agenticRun?.status?.steps?.analysis?.results?.length) return 'Analyzing';
-
-  // Sandbox allocated or analysis step present means analysis has started
-  if (agenticRun?.status?.steps?.analysis?.sandbox?.claimName) return 'Analyzing';
-
-  // If any condition is Unknown, the operator is still reconciling
-  if (conditions.some((c: K8sResourceCondition) => c.status === 'Unknown')) return 'Pending';
+  if (analyzed?.status === 'Unknown') return 'Analyzing';
+  if (analyzed?.status === 'False') return 'Failed';
 
   return 'Pending';
 };
