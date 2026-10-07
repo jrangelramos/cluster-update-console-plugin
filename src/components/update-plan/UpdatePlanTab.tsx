@@ -34,9 +34,9 @@ import {
   getPhaseDisplay,
 } from '../../models/agenticrun';
 import { I18N_NAMESPACE, LABELS } from '../../utils/constants';
-import { compareSemVer, unsanitizeVersion } from '../../utils/version';
-import { useApprovalActions } from '../../hooks/useApprovalActions';
-import { useAgenticRunApprovals, useAnalysisResults } from '../../hooks/useAgenticRuns';
+import { compareSemVer, getUpdateType, unsanitizeVersion } from '../../utils/version';
+import { useAnalysisResults } from '../../hooks/useAgenticRuns';
+import { useRequestAnalysis } from '../../hooks/useRequestAnalysis';
 import PhaseLabel from '../shared/PhaseLabel';
 import PlanHeader from './PlanHeader';
 import AnalysisResultView from './AnalysisResultView';
@@ -107,94 +107,88 @@ const ReanalyseButton: React.FC<ReanalyseButtonProps> = ({ agenticRun }) => {
   );
 };
 
+type UpgradePath = {
+  version: string;
+  updateType: string;
+};
+
 type UpdatePlanTabProps = {
   clusterVersion: ClusterVersion;
   agenticRuns: LightspeedAgenticRun[];
 };
 
-const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ agenticRuns }) => {
+const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ clusterVersion, agenticRuns }) => {
   const { t } = useTranslation(I18N_NAMESPACE);
-  const [selectedName, setSelectedName] = React.useState('');
+  const [selectedVersion, setSelectedVersion] = React.useState('');
   const [expandedPanels, setExpandedPanels] = React.useState<Set<string>>(new Set());
   const userCollapsedRef = React.useRef<Set<string>>(new Set());
-  const [submittedNames, setSubmittedNames] = React.useState<Set<string>>(new Set());
-  const [approvalsRaw] = useAgenticRunApprovals();
-  const approvals = approvalsRaw ?? [];
+  const [requestedVersions, setRequestedVersions] = React.useState<Set<string>>(new Set());
   const [analysisResultsRaw] = useAnalysisResults();
   const analysisResults = analysisResultsRaw ?? [];
+  const { requestAnalysis, requesting, error: requestError } = useRequestAnalysis();
 
-  const selectedRun = React.useMemo(
-    () => agenticRuns.find((p) => p.metadata?.name === selectedName),
-    [agenticRuns, selectedName],
-  );
+  const currentVersion = clusterVersion.status?.desired?.version ?? '';
 
-  const selectedApproval = React.useMemo(
-    () =>
-      approvals.find(
-        (a) =>
-          a.metadata?.name === selectedRun?.metadata?.name &&
-          a.metadata?.namespace === selectedRun?.metadata?.namespace,
-      ),
-    [approvals, selectedRun],
-  );
-
-  const selectedPhase = derivePhase(selectedRun);
-
-  // All runs that are active (analyzing, analyzed, or just submitted)
-  const activeRuns = React.useMemo(
-    () =>
-      agenticRuns.filter((p) => {
-        const phase = derivePhase(p);
-        if (ACTIVE_AGENTIC_RUN_PHASES.has(phase)) return true;
-        if (submittedNames.has(p.metadata?.name ?? '')) return true;
-        return false;
-      }),
-    [agenticRuns, submittedNames],
-  );
-
-  // Clear submitted tracking once the real phase kicks in
-  React.useEffect(() => {
-    if (submittedNames.size === 0) return;
-    const stillPending = new Set<string>();
-    submittedNames.forEach((name) => {
-      const p = agenticRuns.find((pr) => pr.metadata?.name === name);
-      if (p && derivePhase(p) === 'Pending') stillPending.add(name);
-    });
-    if (stillPending.size < submittedNames.size) setSubmittedNames(stillPending);
-  }, [agenticRuns, submittedNames]);
-
-  // Auto-expand newly active runs unless the user manually collapsed them
-  React.useEffect(() => {
-    if (activeRuns.length > 0) {
-      setExpandedPanels((prev) => {
-        const next = new Set(prev);
-        activeRuns.forEach((p) => {
-          const name = p.metadata?.name;
-          if (name && !userCollapsedRef.current.has(name)) next.add(name);
-        });
-        return next;
+  // Build upgrade paths from ClusterVersion status
+  const upgradePaths: UpgradePath[] = React.useMemo(() => {
+    const paths: UpgradePath[] = [];
+    for (const u of clusterVersion.status?.availableUpdates ?? []) {
+      paths.push({ version: u.version, updateType: getUpdateType(currentVersion, u.version) });
+    }
+    for (const cu of clusterVersion.status?.conditionalUpdates ?? []) {
+      paths.push({
+        version: cu.release.version,
+        updateType: getUpdateType(currentVersion, cu.release.version),
       });
     }
-  }, [activeRuns]);
+    return paths.sort((a, b) => compareSemVer(a.version, b.version));
+  }, [clusterVersion, currentVersion]);
 
-  const { approveStage, error: approveError, inProgress } = useApprovalActions(selectedApproval);
+  // Find matching AgenticRun for a target version
+  const findRun = React.useCallback(
+    (version: string): LightspeedAgenticRun | undefined =>
+      agenticRuns.find(
+        (r) => unsanitizeVersion(r.metadata?.labels?.[LABELS.targetVersion] ?? '') === version,
+      ),
+    [agenticRuns],
+  );
 
-  const handleAnalyse = React.useCallback(async () => {
-    if (!selectedRun?.metadata?.name) return;
-    const name = selectedRun.metadata.name;
-    const ok = await approveStage('Analysis');
-    if (ok) {
-      setSubmittedNames((prev) => new Set(prev).add(name));
+  const selectedRun = React.useMemo(() => findRun(selectedVersion), [findRun, selectedVersion]);
+  const selectedPhase = derivePhase(selectedRun);
+
+  // Clear requestedVersions once an AgenticRun appears for them
+  React.useEffect(() => {
+    if (requestedVersions.size === 0) return;
+    const stillPending = new Set<string>();
+    requestedVersions.forEach((v) => {
+      if (!findRun(v)) stillPending.add(v);
+    });
+    if (stillPending.size < requestedVersions.size) setRequestedVersions(stillPending);
+  }, [agenticRuns, requestedVersions, findRun]);
+
+  // Auto-expand when an AgenticRun becomes active
+  React.useEffect(() => {
+    if (!selectedRun) return;
+    const name = selectedRun.metadata?.name;
+    const phase = derivePhase(selectedRun);
+    if (name && ACTIVE_AGENTIC_RUN_PHASES.has(phase) && !userCollapsedRef.current.has(name)) {
       setExpandedPanels((prev) => new Set(prev).add(name));
     }
-  }, [selectedRun, approveStage]);
+  }, [selectedRun]);
 
-  // Auto-select first run if none selected
+  // Handle Analyse click — creates request CR, CVO auto-approves analysis
+  const handleAnalyse = React.useCallback(async () => {
+    if (!selectedVersion || selectedRun) return;
+    await requestAnalysis(selectedVersion);
+    setRequestedVersions((prev) => new Set(prev).add(selectedVersion));
+  }, [selectedVersion, selectedRun, requestAnalysis]);
+
+  // Auto-select first path
   React.useEffect(() => {
-    if (!selectedName && agenticRuns.length > 0) {
-      setSelectedName(agenticRuns[0].metadata?.name ?? '');
+    if (!selectedVersion && upgradePaths.length > 0) {
+      setSelectedVersion(upgradePaths[0].version);
     }
-  }, [selectedName, agenticRuns]);
+  }, [selectedVersion, upgradePaths]);
 
   const togglePanel = React.useCallback((name: string) => {
     setExpandedPanels((prev) => {
@@ -210,23 +204,22 @@ const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ agenticRuns }) => {
     });
   }, []);
 
-  if (agenticRuns.length === 0) {
+  if (upgradePaths.length === 0) {
     return (
-      <EmptyState titleText={t('No update plans available')} headingLevel="h2" icon={CubesIcon}>
+      <EmptyState titleText={t('No upgrade paths available')} headingLevel="h2" icon={CubesIcon}>
         <EmptyStateBody>
-          {t(
-            'Update plans are created automatically when the cluster-version-operator detects available update paths.',
-          )}
+          {t('No available or conditional updates found for this cluster.')}
         </EmptyStateBody>
       </EmptyState>
     );
   }
 
-  const showAnalyseButton = selectedPhase === 'Pending';
+  const showAnalyseButton = !selectedRun;
+  const isRequesting = requestedVersions.has(selectedVersion);
 
   return (
     <Stack hasGutter>
-      {/* Run selector */}
+      {/* Path selector */}
       <StackItem>
         <Card>
           <CardTitle>{t('Select Update Path')}</CardTitle>
@@ -234,57 +227,61 @@ const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ agenticRuns }) => {
             <Flex alignItems={{ default: 'alignItemsCenter' }} gap={{ default: 'gapMd' }}>
               <FlexItem grow={{ default: 'grow' }} style={{ maxWidth: '400px' }}>
                 <FormSelect
-                  value={selectedName}
-                  onChange={(_event, value) => setSelectedName(value)}
-                  aria-label={t('Select agentic run')}
+                  value={selectedVersion}
+                  onChange={(_event, value) => setSelectedVersion(value)}
+                  aria-label={t('Select update path')}
                 >
-                  {[...agenticRuns]
-                    .sort((a, b) => {
-                      const vA = unsanitizeVersion(
-                        a.metadata?.labels?.[LABELS.targetVersion] ?? '',
-                      );
-                      const vB = unsanitizeVersion(
-                        b.metadata?.labels?.[LABELS.targetVersion] ?? '',
-                      );
-                      return compareSemVer(vA, vB);
-                    })
-                    .map((p) => {
-                      const rawTarget = p.metadata?.labels?.[LABELS.targetVersion] ?? '';
-                      const target = rawTarget
-                        ? unsanitizeVersion(rawTarget)
-                        : (p.metadata?.name ?? '');
-                      const updateType = p.metadata?.labels?.[LABELS.updateType] ?? '';
-                      const pPhase = derivePhase(p);
-                      const suffix =
-                        pPhase !== 'Pending' ? ` (${getPhaseDisplay(pPhase).label})` : '';
-                      return (
-                        <FormSelectOption
-                          key={p.metadata?.name}
-                          value={p.metadata?.name ?? ''}
-                          label={`${target} — ${updateType}${suffix}`}
-                        />
-                      );
-                    })}
+                  {upgradePaths.map((path) => {
+                    const run = findRun(path.version);
+                    const phase = run ? derivePhase(run) : undefined;
+                    const phaseSuffix =
+                      phase && phase !== 'Pending'
+                        ? ` (${getPhaseDisplay(phase).label})`
+                        : '';
+                    const notAnalysed = !run ? ' — Not analysed' : '';
+                    return (
+                      <FormSelectOption
+                        key={path.version}
+                        value={path.version}
+                        label={`${path.version} — ${path.updateType}${phaseSuffix}${notAnalysed}`}
+                      />
+                    );
+                  })}
                 </FormSelect>
               </FlexItem>
-              <FlexItem>
-                <PhaseLabel phase={selectedPhase} />
-              </FlexItem>
-              {showAnalyseButton && (
+              {selectedRun && (
+                <FlexItem>
+                  <PhaseLabel phase={selectedPhase} />
+                </FlexItem>
+              )}
+              {showAnalyseButton && !isRequesting && (
                 <FlexItem>
                   <Button
                     variant="primary"
                     icon={<SearchIcon />}
-                    isDisabled={inProgress || !selectedApproval}
-                    isLoading={inProgress}
+                    isDisabled={requesting}
+                    isLoading={requesting}
                     onClick={handleAnalyse}
                   >
                     {t('Analyse')}
                   </Button>
                 </FlexItem>
               )}
+              {isRequesting && !selectedRun && (
+                <FlexItem>
+                  <Flex
+                    alignItems={{ default: 'alignItemsCenter' }}
+                    gap={{ default: 'gapSm' }}
+                  >
+                    <FlexItem>
+                      <Spinner size="md" aria-label={t('Requesting')} />
+                    </FlexItem>
+                    <FlexItem>{t('Requesting analysis...')}</FlexItem>
+                  </Flex>
+                </FlexItem>
+              )}
             </Flex>
-            {approveError && (
+            {requestError && (
               <Content
                 component="p"
                 style={{
@@ -292,17 +289,18 @@ const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ agenticRuns }) => {
                   marginTop: '8px',
                 }}
               >
-                {approveError}
+                {requestError}
               </Content>
             )}
           </CardBody>
         </Card>
       </StackItem>
 
-      {/* Selected run's expandable panel */}
-      {activeRuns
-        .filter((r) => r.metadata?.name === selectedName)
-        .map((agenticRun) => {
+      {/* Selected run's detail panel — only when an AgenticRun exists and is active */}
+      {selectedRun &&
+        ACTIVE_AGENTIC_RUN_PHASES.has(selectedPhase) &&
+        (() => {
+          const agenticRun = selectedRun;
           const name = agenticRun.metadata?.name ?? '';
           const rawTarget = agenticRun.metadata?.labels?.[LABELS.targetVersion] ?? '';
           const target = rawTarget ? unsanitizeVersion(rawTarget) : name;
@@ -310,9 +308,7 @@ const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ agenticRuns }) => {
           const phaseDisplay = getPhaseDisplay(pPhase);
 
           const stepResults = agenticRun.status?.steps?.analysis?.results;
-          const resultRef = (
-            stepResults?.[stepResults.length - 1] as { name?: string }
-          )?.name;
+          const resultRef = (stepResults?.[stepResults.length - 1] as { name?: string })?.name;
           const result = resultRef
             ? analysisResults.find(
                 (r: LightspeedAnalysisResult) =>
@@ -333,7 +329,10 @@ const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ agenticRuns }) => {
             <StackItem key={name}>
               <ExpandableSection
                 toggleContent={
-                  <Flex alignItems={{ default: 'alignItemsCenter' }} gap={{ default: 'gapSm' }}>
+                  <Flex
+                    alignItems={{ default: 'alignItemsCenter' }}
+                    gap={{ default: 'gapSm' }}
+                  >
                     <FlexItem>
                       <strong>{t('Update to {{version}}', { version: target })}</strong>
                     </FlexItem>
@@ -362,7 +361,7 @@ const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ agenticRuns }) => {
                   <StackItem>
                     <PlanHeader agenticRun={agenticRun} />
                   </StackItem>
-                  {pPhase === 'Analyzing' || (pPhase === 'Pending' && submittedNames.has(name)) ? (
+                  {pPhase === 'Analyzing' ? (
                     <StackItem>
                       <Card>
                         <CardBody>
@@ -416,7 +415,9 @@ const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ agenticRuns }) => {
                       {resultData.components.length > 0 || resultData.analysisData ? (
                         <AnalysisResultView analysisData={resultData} />
                       ) : (
-                        <Content component="p">{t('Analysis result not yet available.')}</Content>
+                        <Content component="p">
+                          {t('Analysis result not yet available.')}
+                        </Content>
                       )}
                     </StackItem>
                   )}
@@ -424,7 +425,7 @@ const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ agenticRuns }) => {
               </ExpandableSection>
             </StackItem>
           );
-        })}
+        })()}
     </Stack>
   );
 };
