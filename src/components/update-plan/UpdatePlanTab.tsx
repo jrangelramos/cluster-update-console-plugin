@@ -401,7 +401,7 @@ const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ clusterVersion, agenticRu
                   <StackItem>
                     <PlanHeader agenticRun={agenticRun} />
                   </StackItem>
-                  {pPhase === 'Analyzing' || (pPhase === 'Pending' && submittedNames.has(name)) ? (
+                  {(pPhase === 'Analyzing' || (pPhase === 'Pending' && submittedNames.has(name))) && (
                     <StackItem>
                       <Card>
                         <CardBody>
@@ -436,7 +436,13 @@ const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ clusterVersion, agenticRu
                         </CardBody>
                       </Card>
                     </StackItem>
-                  ) : pPhase === 'Failed' ? (
+                  )}
+                  {hasStepLogs(agenticRun, 'analysis') && (
+                    <StackItem>
+                      <AnalysisLogs run={agenticRun} />
+                    </StackItem>
+                  )}
+                  {pPhase === 'Failed' && (
                     <StackItem>
                       <Alert
                         variant="danger"
@@ -450,7 +456,10 @@ const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ clusterVersion, agenticRu
                           t('Unknown error')}
                       </Alert>
                     </StackItem>
-                  ) : (
+                  )}
+                  {pPhase !== 'Failed' &&
+                    pPhase !== 'Analyzing' &&
+                    !(pPhase === 'Pending' && submittedNames.has(name)) && (
                     <>
                       <StackItem>
                         {resultData.options.length > 0 ||
@@ -480,11 +489,6 @@ const UpdatePlanTab: React.FC<UpdatePlanTabProps> = ({ clusterVersion, agenticRu
                         </StackItem>
                       )}
                     </>
-                  )}
-                  {hasStepLogs(agenticRun, 'analysis') && (
-                    <StackItem>
-                      <AnalysisLogs run={agenticRun} />
-                    </StackItem>
                   )}
                   {hasExecution(agenticRun) && (
                     <StackItem>

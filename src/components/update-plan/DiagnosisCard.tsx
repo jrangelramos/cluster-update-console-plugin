@@ -10,6 +10,7 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 import { DiagnosisResult } from '../../models/agenticrun';
+import { MarkdownContent } from '../shared/MarkdownContent';
 import { I18N_NAMESPACE } from '../../utils/constants';
 
 type DiagnosisCardProps = {
@@ -51,7 +52,7 @@ const DiagnosisCard: React.FC<DiagnosisCardProps> = ({ diagnosis }) => {
       <CardBody>
         <Stack hasGutter>
           <StackItem>
-            <Content component="p">{diagnosis.summary}</Content>
+            <MarkdownContent text={diagnosis.summary} />
           </StackItem>
           {diagnosis.rootCause && (
             <StackItem>
